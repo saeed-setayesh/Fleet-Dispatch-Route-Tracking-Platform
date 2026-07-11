@@ -1,6 +1,10 @@
 # Fleet Dispatch & Route Tracking Platform
 
-Full-stack fleet dispatch and live route tracking for tow and delivery operations across **Calgary & Alberta**. Built as a portfolio project extending the [DitchApp](https://github.com) domain (tow drivers, incident response) into operational dispatch — the kind of system used by **GBCS Group**, **Routeique**, **Trimble Transportation**, **Ziing**, **GoBolt**, and **Attabotics**.
+Full-stack fleet dispatch and live route tracking for tow and delivery operations across **Calgary & Alberta**.
+
+Live Demo: https://fleet-dispatch-route-tracking-platform-production.up.railway.app/
+
+Note: use the demo info below for login and testing the live demo!
 
 ## Stack
 
