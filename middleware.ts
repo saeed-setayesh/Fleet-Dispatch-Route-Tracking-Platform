@@ -1,6 +1,9 @@
-import { auth } from "@/lib/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "@/lib/auth.config";
 import { NextResponse } from "next/server";
-import type { UserRole } from "@/lib/db/schema";
+import type { UserRole } from "@/lib/types";
+
+const { auth } = NextAuth(authConfig);
 
 const ROLE_ROUTES: Record<string, UserRole> = {
   "/dispatcher": "dispatcher",

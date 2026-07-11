@@ -2,6 +2,7 @@ import type { Coordinate } from "@/lib/assignment/scorer";
 import { haversineKm } from "@/lib/assignment/scorer";
 
 const OSRM_BASE = "https://router.project-osrm.org";
+const MIN_POLYLINE_POINTS = 8;
 
 export interface Waypoint extends Coordinate {
   address: string;
@@ -19,71 +20,160 @@ function coordsToOsrmString(points: Coordinate[]): string {
   return points.map((p) => `${p.lng},${p.lat}`).join(";");
 }
 
+function parseGeoJsonLine(
+  geometry: { type?: string; coordinates?: [number, number][] } | undefined
+): Coordinate[] {
+  if (!geometry?.coordinates?.length) return [];
+  return geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
+}
+
+export function isSparsePolyline(polyline: Coordinate[]): boolean {
+  return polyline.length < MIN_POLYLINE_POINTS;
+}
+
+/** Fetch real road-following geometry from OSRM Route API. */
+export async function fetchDrivingRoute(
+  waypoints: Coordinate[]
+): Promise<Omit<OptimizedRoute, "waypoints" | "optimizedOrder"> & { waypoints: Coordinate[] }> {
+  if (waypoints.length < 2) {
+    return {
+      waypoints,
+      polyline: waypoints,
+      totalDistanceM: 0,
+      totalDurationS: 0,
+    };
+  }
+
+  try {
+    const coords = coordsToOsrmString(waypoints);
+    const url = `${OSRM_BASE}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false&continue_straight=false`;
+
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+
+    if (!res.ok) throw new Error(`OSRM route failed: ${res.status}`);
+
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.routes?.[0]) {
+      throw new Error(`OSRM error: ${data.code ?? "unknown"}`);
+    }
+
+    const route = data.routes[0];
+    const polyline = parseGeoJsonLine(route.geometry);
+
+    if (polyline.length === 0) throw new Error("Empty geometry");
+
+    return {
+      waypoints,
+      polyline,
+      totalDistanceM: route.distance ?? 0,
+      totalDurationS: route.duration ?? 0,
+    };
+  } catch (err) {
+    console.warn("[OSRM] Route fetch failed, using fallback:", err);
+    return fallbackRoute(waypoints);
+  }
+}
+
 export async function optimizeRoute(
   waypoints: Waypoint[]
 ): Promise<OptimizedRoute> {
   if (waypoints.length < 2) {
-    return fallbackRoute(waypoints);
+    return fallbackRouteWithMeta(waypoints);
+  }
+
+  if (waypoints.length === 2) {
+    const driven = await fetchDrivingRoute(waypoints);
+    return {
+      waypoints,
+      optimizedOrder: [0, 1],
+      polyline: driven.polyline,
+      totalDistanceM: driven.totalDistanceM,
+      totalDurationS: driven.totalDurationS,
+    };
   }
 
   try {
     const coords = coordsToOsrmString(waypoints);
     const tripUrl = `${OSRM_BASE}/trip/v1/driving/${coords}?source=first&destination=last&roundtrip=false&geometries=geojson`;
 
-    const tripRes = await fetch(tripUrl, { next: { revalidate: 0 } });
-    if (!tripRes.ok) return fallbackRoute(waypoints);
+    const tripRes = await fetch(tripUrl, { cache: "no-store" });
+    if (!tripRes.ok) return fallbackRouteWithMeta(waypoints);
 
     const tripData = await tripRes.json();
-    if (tripData.code !== "Ok" || !tripData.waypoints) {
-      return fallbackRoute(waypoints);
+    if (tripData.code !== "Ok" || !tripData.trips?.[0]) {
+      return fallbackRouteWithMeta(waypoints);
     }
 
+    const trip = tripData.trips[0];
     const optimizedOrder: number[] = tripData.waypoints.map(
       (w: { waypoint_index: number }) => w.waypoint_index
     );
-
     const ordered = optimizedOrder.map((i) => waypoints[i]);
-    const orderedCoords = coordsToOsrmString(ordered);
 
-    const routeUrl = `${OSRM_BASE}/route/v1/driving/${orderedCoords}?overview=full&geometries=geojson`;
-    const routeRes = await fetch(routeUrl, { next: { revalidate: 0 } });
-    if (!routeRes.ok) {
-      return {
-        waypoints: ordered,
-        optimizedOrder,
-        polyline: ordered,
-        totalDistanceM: estimateDistance(ordered),
-        totalDurationS: estimateDuration(ordered),
-      };
+    let polyline = parseGeoJsonLine(trip.geometry);
+    let totalDistanceM = trip.distance ?? 0;
+    let totalDurationS = trip.duration ?? 0;
+
+    if (isSparsePolyline(polyline)) {
+      const driven = await fetchDrivingRoute(ordered);
+      polyline = driven.polyline;
+      totalDistanceM = driven.totalDistanceM;
+      totalDurationS = driven.totalDurationS;
     }
-
-    const routeData = await routeRes.json();
-    const route = routeData.routes?.[0];
-    const polyline: Coordinate[] =
-      route?.geometry?.coordinates?.map(
-        ([lng, lat]: [number, number]) => ({ lat, lng })
-      ) ?? ordered;
 
     return {
       waypoints: ordered,
       optimizedOrder,
       polyline,
-      totalDistanceM: route?.distance ?? estimateDistance(ordered),
-      totalDurationS: route?.duration ?? estimateDuration(ordered),
+      totalDistanceM,
+      totalDurationS,
     };
   } catch {
-    return fallbackRoute(waypoints);
+    return fallbackRouteWithMeta(waypoints);
   }
 }
 
-function fallbackRoute(waypoints: Waypoint[]): OptimizedRoute {
+function fallbackRoute(points: Coordinate[]) {
+  return {
+    waypoints: points,
+    polyline: densifyStraightLine(points),
+    totalDistanceM: estimateDistance(points) * 1000,
+    totalDurationS: estimateDuration(points),
+  };
+}
+
+function fallbackRouteWithMeta(waypoints: Waypoint[]): OptimizedRoute {
+  const pts = waypoints.map(({ lat, lng }) => ({ lat, lng }));
+  const fb = fallbackRoute(pts);
   return {
     waypoints,
     optimizedOrder: waypoints.map((_, i) => i),
-    polyline: waypoints,
-    totalDistanceM: estimateDistance(waypoints) * 1000,
-    totalDurationS: estimateDuration(waypoints),
+    polyline: fb.polyline,
+    totalDistanceM: fb.totalDistanceM,
+    totalDurationS: fb.totalDurationS,
   };
+}
+
+/** Insert intermediate points so straight-line fallback still animates smoothly. */
+function densifyStraightLine(points: Coordinate[], segmentsPerLeg = 24): Coordinate[] {
+  if (points.length < 2) return points;
+  const dense: Coordinate[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    for (let s = 0; s < segmentsPerLeg; s++) {
+      const t = s / segmentsPerLeg;
+      dense.push({
+        lat: from.lat + (to.lat - from.lat) * t,
+        lng: from.lng + (to.lng - from.lng) * t,
+      });
+    }
+  }
+  dense.push(points[points.length - 1]);
+  return dense;
 }
 
 function estimateDistance(points: Coordinate[]): number {
@@ -96,10 +186,53 @@ function estimateDistance(points: Coordinate[]): number {
 
 function estimateDuration(points: Coordinate[]): number {
   const km = estimateDistance(points);
-  const avgSpeedKmh = 50;
-  return (km / avgSpeedKmh) * 3600;
+  return (km / 55) * 3600;
 }
 
 export function etaFromDuration(durationS: number): Date {
   return new Date(Date.now() + durationS * 1000);
+}
+
+export function splitPolylineByProgress(
+  polyline: Coordinate[],
+  progress: number
+): { traveled: Coordinate[]; remaining: Coordinate[] } {
+  if (polyline.length < 2 || progress <= 0) {
+    return { traveled: polyline.slice(0, 1), remaining: polyline };
+  }
+  if (progress >= 1) {
+    return { traveled: polyline, remaining: [polyline[polyline.length - 1]] };
+  }
+
+  const segmentLengths: number[] = [];
+  let total = 0;
+  for (let i = 1; i < polyline.length; i++) {
+    const len = haversineKm(polyline[i - 1], polyline[i]);
+    segmentLengths.push(len);
+    total += len;
+  }
+
+  const target = progress * total;
+  let acc = 0;
+  let splitIndex = 0;
+  let splitPoint = polyline[0];
+
+  for (let i = 0; i < segmentLengths.length; i++) {
+    if (acc + segmentLengths[i] >= target) {
+      const ratio = (target - acc) / segmentLengths[i];
+      const from = polyline[i];
+      const to = polyline[i + 1];
+      splitPoint = {
+        lat: from.lat + (to.lat - from.lat) * ratio,
+        lng: from.lng + (to.lng - from.lng) * ratio,
+      };
+      splitIndex = i;
+      break;
+    }
+    acc += segmentLengths[i];
+  }
+
+  const traveled = [...polyline.slice(0, splitIndex + 1), splitPoint];
+  const remaining = [splitPoint, ...polyline.slice(splitIndex + 1)];
+  return { traveled, remaining };
 }

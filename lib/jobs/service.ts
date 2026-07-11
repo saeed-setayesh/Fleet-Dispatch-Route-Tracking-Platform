@@ -12,12 +12,20 @@ import {
 import { eq, and, inArray, desc, sql } from "drizzle-orm";
 import { canTransition } from "@/lib/jobs/state-machine";
 import { notifyJobStatusChange } from "@/lib/notifications/service";
+import type { Coordinate } from "@/lib/assignment/scorer";
 import {
   optimizeRoute,
+  fetchDrivingRoute,
   etaFromDuration,
+  isSparsePolyline,
+  splitPolylineByProgress,
   type Waypoint,
 } from "@/lib/routing/osrm";
-import { decodePolyline } from "@/lib/simulation/interpolate";
+import {
+  decodePolyline,
+  interpolateAlongPolyline,
+  nearestProgressOnPolyline,
+} from "@/lib/simulation/interpolate";
 
 export async function createJob(input: {
   customerId: string;
@@ -116,6 +124,7 @@ export async function assignJob(
     .where(eq(drivers.id, driverId));
 
   await notifyJobStatusChange(jobId, "assigned");
+  await refreshNavigationRoute(jobId);
 
   return getJobById(jobId);
 }
@@ -145,6 +154,10 @@ export async function transitionJob(
     note,
   });
 
+  if (toStatus === "en_route" || toStatus === "in_progress") {
+    await refreshNavigationRoute(jobId);
+  }
+
   if (toStatus === "completed" && job.driverId) {
     const activeCount = await getActiveJobCount(job.driverId);
     if (activeCount === 0) {
@@ -158,6 +171,145 @@ export async function transitionJob(
   await notifyJobStatusChange(jobId, toStatus);
 
   return getJobById(jobId);
+}
+
+async function refreshNavigationRoute(jobId: string) {
+  const nav = await buildNavigationForJob(jobId);
+  if (!nav) return;
+
+  const eta = etaFromDuration(nav.totalDurationS);
+  const [existing] = await db
+    .select()
+    .from(routes)
+    .where(eq(routes.jobId, jobId))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(routes)
+      .set({
+        polyline: nav.polyline,
+        totalDistanceM: nav.totalDistanceM,
+        totalDurationS: nav.totalDurationS,
+        eta,
+      })
+      .where(eq(routes.jobId, jobId));
+  } else {
+    await db.insert(routes).values({
+      jobId,
+      waypoints: nav.waypoints,
+      optimizedOrder: nav.waypoints.map((_, i) => i),
+      polyline: nav.polyline,
+      totalDistanceM: nav.totalDistanceM,
+      totalDurationS: nav.totalDurationS,
+      eta,
+    });
+  }
+
+  await db.update(jobs).set({ eta, updatedAt: new Date() }).where(eq(jobs.id, jobId));
+}
+
+async function buildNavigationForJob(jobId: string) {
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+  if (!job) return null;
+
+  const pickup: Coordinate = { lat: job.pickupLat, lng: job.pickupLng };
+  const dropoff: Coordinate = { lat: job.dropoffLat, lng: job.dropoffLng };
+
+  const waypointsMeta: Waypoint[] = [
+    { ...pickup, address: job.pickupAddress },
+    { ...dropoff, address: job.dropoffAddress },
+  ];
+
+  let routePoints: Coordinate[] = [pickup, dropoff];
+
+  if (job.driverId) {
+    const [driver] = await db
+      .select()
+      .from(drivers)
+      .where(eq(drivers.id, job.driverId))
+      .limit(1);
+
+    if (driver) {
+      const driverPos = { lat: driver.currentLat, lng: driver.currentLng };
+      if (job.status === "in_progress") {
+        routePoints = [driverPos, dropoff];
+        waypointsMeta.unshift({
+          ...driverPos,
+          address: "Driver location",
+        });
+      } else if (["assigned", "en_route"].includes(job.status)) {
+        routePoints = [driverPos, pickup, dropoff];
+        waypointsMeta.unshift({
+          ...driverPos,
+          address: "Driver location",
+        });
+      }
+    }
+  }
+
+  const driven = await fetchDrivingRoute(routePoints);
+  return {
+    waypoints: waypointsMeta,
+    polyline: driven.polyline,
+    totalDistanceM: driven.totalDistanceM,
+    totalDurationS: driven.totalDurationS,
+    pickup,
+    dropoff,
+  };
+}
+
+export async function getJobNavigation(jobId: string) {
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+  if (!job) return null;
+
+  let nav = await buildNavigationForJob(jobId);
+  if (!nav) return null;
+
+  if (isSparsePolyline(nav.polyline)) {
+    const fallback = await fetchDrivingRoute([
+      { lat: job.pickupLat, lng: job.pickupLng },
+      { lat: job.dropoffLat, lng: job.dropoffLng },
+    ]);
+    nav = {
+      ...nav,
+      polyline: fallback.polyline,
+      totalDistanceM: fallback.totalDistanceM,
+      totalDurationS: fallback.totalDurationS,
+    };
+  }
+
+  let progress = 0;
+  let driverPos: Coordinate | null = null;
+
+  if (job.driverId) {
+    const [driver] = await db
+      .select()
+      .from(drivers)
+      .where(eq(drivers.id, job.driverId))
+      .limit(1);
+    if (driver) {
+      driverPos = { lat: driver.currentLat, lng: driver.currentLng };
+      progress = nearestProgressOnPolyline(nav.polyline, driverPos);
+    }
+  }
+
+  const { traveled, remaining } = splitPolylineByProgress(nav.polyline, progress);
+
+  return {
+    jobId,
+    status: job.status,
+    polyline: nav.polyline,
+    traveled,
+    remaining,
+    progress,
+    pickup: nav.pickup,
+    dropoff: nav.dropoff,
+    driverPos,
+    totalDistanceM: nav.totalDistanceM,
+    totalDurationS: nav.totalDurationS,
+    eta: job.eta,
+  };
 }
 
 export async function cancelJob(jobId: string, actorId: string) {
@@ -219,11 +371,32 @@ export async function getJobById(jobId: string) {
     }
   }
 
-  const [route] = await db
+  let [route] = await db
     .select()
     .from(routes)
     .where(eq(routes.jobId, jobId))
     .limit(1);
+
+  if (route && isSparsePolyline(decodePolyline(route.polyline))) {
+    const refreshed = await fetchDrivingRoute([
+      { lat: jobRow.pickupLat, lng: jobRow.pickupLng },
+      { lat: jobRow.dropoffLat, lng: jobRow.dropoffLng },
+    ]);
+    await db
+      .update(routes)
+      .set({
+        polyline: refreshed.polyline,
+        totalDistanceM: refreshed.totalDistanceM,
+        totalDurationS: refreshed.totalDurationS,
+      })
+      .where(eq(routes.jobId, jobId));
+    route = {
+      ...route,
+      polyline: refreshed.polyline,
+      totalDistanceM: refreshed.totalDistanceM,
+      totalDurationS: refreshed.totalDurationS,
+    };
+  }
 
   const events = await db
     .select({
@@ -348,17 +521,16 @@ export async function simulateDriverMovement(jobId: string) {
     return null;
   }
 
-  const [route] = await db
-    .select()
-    .from(routes)
-    .where(eq(routes.jobId, jobId))
-    .limit(1);
+  let nav = await buildNavigationForJob(jobId);
+  if (!nav || nav.polyline.length === 0) return null;
 
-  if (!route) return null;
+  if (isSparsePolyline(nav.polyline)) {
+    await refreshNavigationRoute(jobId);
+    nav = await buildNavigationForJob(jobId);
+    if (!nav) return null;
+  }
 
-  const polyline = decodePolyline(route.polyline);
-  if (polyline.length === 0) return null;
-
+  const polyline = nav.polyline;
   const enRouteEvent = await db
     .select()
     .from(jobStatusEvents)
@@ -371,12 +543,17 @@ export async function simulateDriverMovement(jobId: string) {
   const startTime = enRouteEvent[0]?.createdAt ?? new Date();
   const elapsedSeconds = (Date.now() - startTime.getTime()) / 1000;
 
-  const { interpolateAlongPolyline } = await import("@/lib/simulation/interpolate");
-  const pos = interpolateAlongPolyline(polyline, elapsedSeconds);
+  const durationS = nav.totalDurationS > 0 ? nav.totalDurationS : 600;
+  const speedKmh =
+    nav.totalDistanceM > 0
+      ? (nav.totalDistanceM / 1000 / durationS) * 3600
+      : 45;
+
+  const pos = interpolateAlongPolyline(polyline, elapsedSeconds, speedKmh);
 
   await updateDriverLocation(job.driverId, pos.lat, pos.lng, pos.heading);
 
-  return { ...pos, driverId: job.driverId };
+  return { ...pos, driverId: job.driverId, progress: pos.progress };
 }
 
 export async function getDriverByUserId(userId: string) {

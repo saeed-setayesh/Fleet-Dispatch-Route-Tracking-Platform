@@ -1,13 +1,18 @@
 "use client";
 
-import { signOut } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FleetMap, type FleetMarker } from "@/components/map/FleetMapClient";
 import { JobCard } from "@/components/jobs/JobCard";
+import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Button } from "@/components/ui/Button";
+import { Card, CardTitle } from "@/components/ui/Card";
 import { CALGARY_LOCATIONS } from "@/lib/constants";
+import {
+  useJobNavigation,
+  navigationToMapProps,
+} from "@/lib/hooks/useJobNavigation";
 import type { JobStatus } from "@/lib/db/schema";
-import { LogOut, Plus, Sparkles } from "lucide-react";
+import { Plus, Sparkles, Truck, ClipboardList, Users } from "lucide-react";
 
 interface Job {
   id: string;
@@ -37,9 +42,6 @@ interface RankedDriver {
   breakdown: {
     totalScore: number;
     distanceKm: number;
-    proximityScore: number;
-    loadScore: number;
-    availabilityScore: number;
   };
 }
 
@@ -47,16 +49,18 @@ export default function DispatcherPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [fleet, setFleet] = useState<FleetMarker[]>([]);
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<RankedDriver[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? null;
+  const { nav } = useJobNavigation(selectedJobId);
 
   const [form, setForm] = useState({
     customerId: "",
     pickupIdx: "0",
     dropoffIdx: "1",
-    priority: "1",
     notes: "",
   });
 
@@ -77,13 +81,16 @@ export default function DispatcherPage() {
           name: string;
           status: string;
           vehicleType: string;
+          heading: number;
         }) => ({
           id: d.driverId,
           lat: d.lat,
           lng: d.lng,
+          heading: d.heading,
           label: d.name,
           status: d.status,
           vehicleType: d.vehicleType,
+          kind: "vehicle" as const,
         })
       )
     );
@@ -96,6 +103,16 @@ export default function DispatcherPage() {
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  const mapProps = useMemo(() => {
+    if (nav && selectedJob) {
+      return navigationToMapProps(nav, selectedJob.driverName ?? "Driver");
+    }
+    return {
+      markers: fleet,
+      routes: [],
+    };
+  }, [nav, selectedJob, fleet]);
 
   async function createJob(e: React.FormEvent) {
     e.preventDefault();
@@ -113,20 +130,19 @@ export default function DispatcherPage() {
         dropoffAddress: dropoff.address,
         dropoffLat: dropoff.lat,
         dropoffLng: dropoff.lng,
-        priority: Number(form.priority),
         notes: form.notes,
       }),
     });
 
     if (res.ok) {
       setShowForm(false);
-      setForm({ customerId: "", pickupIdx: "0", dropoffIdx: "1", priority: "1", notes: "" });
+      setForm({ customerId: "", pickupIdx: "0", dropoffIdx: "1", notes: "" });
       fetchData();
     }
   }
 
   async function suggestDrivers(job: Job) {
-    setSelectedJob(job);
+    setSelectedJobId(job.id);
     const res = await fetch("/api/assignment/suggest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -143,111 +159,128 @@ export default function DispatcherPage() {
       body: JSON.stringify({ driverId }),
     });
     setSuggestions([]);
-    setSelectedJob(null);
     fetchData();
   }
 
   async function cancelJob(id: string) {
     await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+    if (selectedJobId === id) setSelectedJobId(null);
     fetchData();
   }
 
+  const stats = {
+    active: jobs.filter((j) => !["completed", "cancelled"].includes(j.status)).length,
+    enRoute: jobs.filter((j) => j.status === "en_route").length,
+    available: fleet.filter((f) => f.status === "available").length,
+  };
+
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-slate-500">
-        Loading dispatcher dashboard...
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-slate-200 bg-white px-4 py-3">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold">Dispatcher Dashboard</h1>
-            <p className="text-xs text-slate-500">Calgary &amp; Alberta fleet ops</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowForm(!showForm)}>
-              <Plus className="mr-1 h-4 w-4" /> New Job
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => signOut({ callbackUrl: "/login" })}>
-              <LogOut className="mr-1 h-4 w-4" /> Sign out
-            </Button>
-          </div>
-        </div>
-      </header>
+    <DashboardShell
+      title="Command Center"
+      subtitle="Calgary & Alberta · Live fleet ops"
+      badge="Dispatcher"
+      actions={
+        <Button size="sm" onClick={() => setShowForm(!showForm)}>
+          <Plus className="mr-1.5 h-4 w-4" /> New Job
+        </Button>
+      }
+    >
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="stat-chip flex items-center gap-1">
+          <ClipboardList className="h-3 w-3" /> {stats.active} active jobs
+        </span>
+        <span className="stat-chip flex items-center gap-1">
+          <Truck className="h-3 w-3" /> {stats.enRoute} en route
+        </span>
+        <span className="stat-chip flex items-center gap-1">
+          <Users className="h-3 w-3" /> {stats.available} drivers free
+        </span>
+      </div>
 
-      <div className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-2">
-        <div className="space-y-4">
-          <FleetMap markers={fleet} height="420px" />
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="space-y-4 lg:col-span-3">
+          <FleetMap
+            markers={mapProps.markers}
+            routes={mapProps.routes}
+            height="480px"
+            fitRoute={!!selectedJobId}
+          />
 
           {showForm && (
-            <form onSubmit={createJob} className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-              <h2 className="font-semibold">Create Job</h2>
-              <select
-                value={form.customerId}
-                onChange={(e) => setForm({ ...form, customerId: e.target.value })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                required
-              >
-                <option value="">Select customer</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={form.pickupIdx}
-                onChange={(e) => setForm({ ...form, pickupIdx: e.target.value })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              >
-                {CALGARY_LOCATIONS.map((loc, i) => (
-                  <option key={loc.label} value={i}>
-                    Pickup: {loc.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={form.dropoffIdx}
-                onChange={(e) => setForm({ ...form, dropoffIdx: e.target.value })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              >
-                {CALGARY_LOCATIONS.map((loc, i) => (
-                  <option key={loc.label} value={i}>
-                    Dropoff: {loc.label}
-                  </option>
-                ))}
-              </select>
-              <textarea
-                placeholder="Notes"
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                rows={2}
-              />
-              <Button type="submit">Create Job</Button>
-            </form>
+            <Card glow>
+              <CardTitle subtitle="OSRM will compute road-following route">
+                Create Dispatch Job
+              </CardTitle>
+              <form onSubmit={createJob} className="space-y-3">
+                <select
+                  value={form.customerId}
+                  onChange={(e) => setForm({ ...form, customerId: e.target.value })}
+                  className="input-field"
+                  required
+                >
+                  <option value="">Select customer</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={form.pickupIdx}
+                  onChange={(e) => setForm({ ...form, pickupIdx: e.target.value })}
+                  className="input-field"
+                >
+                  {CALGARY_LOCATIONS.map((loc, i) => (
+                    <option key={loc.label} value={i}>Pickup: {loc.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={form.dropoffIdx}
+                  onChange={(e) => setForm({ ...form, dropoffIdx: e.target.value })}
+                  className="input-field"
+                >
+                  {CALGARY_LOCATIONS.map((loc, i) => (
+                    <option key={loc.label} value={i}>Dropoff: {loc.label}</option>
+                  ))}
+                </select>
+                <textarea
+                  placeholder="Dispatch notes..."
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  className="input-field"
+                  rows={2}
+                />
+                <Button type="submit" className="w-full">Dispatch Job</Button>
+              </form>
+            </Card>
           )}
 
           {suggestions.length > 0 && selectedJob && (
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-              <h3 className="flex items-center gap-1 font-semibold text-blue-900">
-                <Sparkles className="h-4 w-4" /> Suggested drivers
-              </h3>
-              <ul className="mt-2 space-y-2">
-                {suggestions.map((d) => (
+            <Card glow>
+              <CardTitle subtitle="Proximity + load scoring">
+                <span className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-red-400" /> Smart Assign
+                </span>
+              </CardTitle>
+              <ul className="space-y-2">
+                {suggestions.map((d, i) => (
                   <li
                     key={d.driverId}
-                    className="flex items-center justify-between rounded-lg bg-white p-3 text-sm"
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-3"
                   >
                     <div>
-                      <p className="font-medium">{d.name}</p>
+                      <p className="font-semibold text-slate-200">
+                        #{i + 1} {d.name}
+                      </p>
                       <p className="text-xs text-slate-500">
                         {d.plateNumber} · {d.breakdown.distanceKm.toFixed(1)} km · score{" "}
-                        {d.breakdown.totalScore.toFixed(3)}
+                        <span className="text-red-400">{d.breakdown.totalScore.toFixed(3)}</span>
                       </p>
                     </div>
                     <Button size="sm" onClick={() => assignDriver(d.driverId)}>
@@ -256,17 +289,21 @@ export default function DispatcherPage() {
                   </li>
                 ))}
               </ul>
-            </div>
+            </Card>
           )}
         </div>
 
-        <div className="space-y-3 max-h-[calc(100vh-5rem)] overflow-y-auto">
-          <h2 className="font-semibold">Jobs ({jobs.length})</h2>
+        <div className="space-y-3 lg:col-span-2 max-h-[calc(100vh-8rem)] overflow-y-auto pr-1">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+            Job Queue · {jobs.length}
+          </h2>
           {jobs.map((job) => (
             <JobCard
               key={job.id}
               job={job}
               showTrackLink
+              selected={selectedJobId === job.id}
+              onSelect={() => setSelectedJobId(job.id)}
               actions={
                 <div className="flex flex-wrap gap-2">
                   {job.status === "requested" && (
@@ -290,6 +327,6 @@ export default function DispatcherPage() {
           ))}
         </div>
       </div>
-    </div>
+    </DashboardShell>
   );
 }

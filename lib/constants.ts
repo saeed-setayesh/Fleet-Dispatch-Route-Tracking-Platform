@@ -51,8 +51,8 @@ export const CALGARY_LOCATIONS = [
 
 export const JOB_STATUS_COLORS: Record<string, string> = {
   requested: "bg-slate-500",
-  assigned: "bg-blue-500",
-  en_route: "bg-amber-500",
+  assigned: "bg-red-500",
+  en_route: "bg-rose-500",
   in_progress: "bg-orange-500",
   completed: "bg-emerald-500",
   cancelled: "bg-red-500",

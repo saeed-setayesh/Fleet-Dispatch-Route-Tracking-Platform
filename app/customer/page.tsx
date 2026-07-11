@@ -1,11 +1,11 @@
 "use client";
 
-import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 import { JobCard } from "@/components/jobs/JobCard";
-import { Button } from "@/components/ui/Button";
-import { LogOut, Package } from "lucide-react";
+import { DashboardShell } from "@/components/layout/DashboardShell";
+import { Card, CardTitle } from "@/components/ui/Card";
 import type { JobStatus } from "@/lib/db/schema";
+import { Package } from "lucide-react";
 
 interface Job {
   id: string;
@@ -35,34 +35,40 @@ export default function CustomerPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-slate-500">
-        Loading your deliveries...
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen">
-      <header className="border-b border-slate-200 bg-white px-4 py-3">
-        <div className="mx-auto flex max-w-lg items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-blue-600" />
-            <h1 className="text-lg font-bold">My Deliveries</h1>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => signOut({ callbackUrl: "/login" })}>
-            <LogOut className="h-4 w-4" />
-          </Button>
-        </div>
-      </header>
+  const active = jobs.filter((j) => !["completed", "cancelled"].includes(j.status));
 
-      <div className="mx-auto max-w-lg space-y-4 p-4">
-        {jobs.length === 0 && (
-          <p className="text-center text-sm text-slate-500">No active deliveries.</p>
-        )}
-        {jobs.map((job) => (
-          <JobCard key={job.id} job={job} showTrackLink />
-        ))}
+  return (
+    <DashboardShell
+      title="My Deliveries"
+      subtitle="Track your tow & delivery in real time"
+      badge="Customer"
+    >
+      <div className="mx-auto max-w-lg space-y-4">
+        <div className="flex gap-2">
+          <span className="stat-chip flex items-center gap-1">
+            <Package className="h-3 w-3" /> {active.length} active
+          </span>
+          <span className="stat-chip">{jobs.length} total</span>
+        </div>
+
+        <Card>
+          <CardTitle subtitle="Tap Track to see live map">Your Jobs</CardTitle>
+          {jobs.length === 0 && (
+            <p className="text-sm text-slate-500">No deliveries yet.</p>
+          )}
+          <div className="space-y-3">
+            {jobs.map((job) => (
+              <JobCard key={job.id} job={job} showTrackLink />
+            ))}
+          </div>
+        </Card>
       </div>
-    </div>
+    </DashboardShell>
   );
 }

@@ -72,6 +72,59 @@ function bearing(from: Coordinate, to: Coordinate): number {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
+export function nearestProgressOnPolyline(
+  polyline: Coordinate[],
+  point: Coordinate
+): number {
+  if (polyline.length < 2) return 0;
+
+  const segmentLengths: number[] = [];
+  let total = 0;
+  for (let i = 1; i < polyline.length; i++) {
+    const len = haversineKm(polyline[i - 1], polyline[i]);
+    segmentLengths.push(len);
+    total += len;
+  }
+  if (total === 0) return 0;
+
+  let bestDist = Infinity;
+  let bestProgress = 0;
+  let acc = 0;
+
+  for (let i = 0; i < segmentLengths.length; i++) {
+    const from = polyline[i];
+    const to = polyline[i + 1];
+    const projected = projectPointOnSegment(from, to, point);
+    const dist = haversineKm(point, projected);
+    if (dist < bestDist) {
+      bestDist = dist;
+      const segProgress =
+        segmentLengths[i] > 0
+          ? haversineKm(from, projected) / segmentLengths[i]
+          : 0;
+      bestProgress = (acc + segProgress * segmentLengths[i]) / total;
+    }
+    acc += segmentLengths[i];
+  }
+
+  return Math.min(1, Math.max(0, bestProgress));
+}
+
+function projectPointOnSegment(
+  from: Coordinate,
+  to: Coordinate,
+  point: Coordinate
+): Coordinate {
+  const dx = to.lng - from.lng;
+  const dy = to.lat - from.lat;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return from;
+  let t =
+    ((point.lng - from.lng) * dx + (point.lat - from.lat) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return { lat: from.lat + t * dy, lng: from.lng + t * dx };
+}
+
 export function decodePolyline(stored: unknown): Coordinate[] {
   if (!Array.isArray(stored)) return [];
   return stored.filter(

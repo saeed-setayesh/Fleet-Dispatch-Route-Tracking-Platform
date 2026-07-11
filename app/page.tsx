@@ -1,71 +1,71 @@
 import Link from "next/link";
-import { Truck, MapPin, Users, ArrowRight } from "lucide-react";
+import { Truck, MapPin, Users, ArrowRight, Zap } from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { Card, CardTitle } from "@/components/ui/Card";
 
 export default function HomePage() {
   return (
-    <main className="flex-1">
-      <header className="border-b border-slate-200 bg-white">
+    <main className="relative min-h-screen">
+      <header className="border-b border-red-950/50 bg-[#0a0808]/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <div className="flex items-center gap-2 font-semibold text-slate-900">
-            <Truck className="h-6 w-6 text-blue-600" />
-            Fleet Dispatch
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-rose-700 shadow-lg shadow-red-500/30">
+              <Truck className="h-5 w-5 text-white" />
+            </div>
+            <span className="text-lg font-bold tracking-tight">Fleet Dispatch</span>
           </div>
-          <Link
-            href="/login"
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
-            Sign in
+          <Link href="/login">
+            <Button size="sm">Sign in</Button>
           </Link>
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-4 py-16">
-        <div className="max-w-2xl">
-          <p className="text-sm font-medium text-blue-600">
-            Logistics-tech portfolio · DitchApp extension
+      <section className="mx-auto max-w-6xl px-4 py-20">
+        <div className="max-w-3xl">
+          <p className="stat-chip inline-flex items-center gap-1">
+            <Zap className="h-3 w-3" /> Alberta logistics-tech portfolio
           </p>
-          <h1 className="mt-2 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
-            Fleet dispatch &amp; live route tracking for Alberta
+          <h1 className="mt-4 text-5xl font-bold leading-tight tracking-tight sm:text-6xl">
+            Dispatch smarter.
+            <span className="block gradient-text">Route on real roads.</span>
           </h1>
-          <p className="mt-4 text-lg text-slate-600">
-            Three-role platform for dispatchers, drivers, and customers — smart
-            job assignment, OSRM route optimization, live map simulation, and
-            status timelines built for tow &amp; delivery operations.
+          <p className="mt-6 max-w-xl text-lg text-slate-400 leading-relaxed">
+            Full-stack fleet platform for tow & delivery — OSRM turn-by-turn routing,
+            live vehicle simulation, smart driver scoring, and customer tracking.
           </p>
-          <Link
-            href="/login"
-            className="mt-8 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700"
-          >
-            Launch demo <ArrowRight className="h-4 w-4" />
+          <Link href="/login" className="mt-10 inline-block">
+            <Button size="lg">
+              Launch demo <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
           </Link>
         </div>
 
-        <div className="mt-16 grid gap-6 sm:grid-cols-3">
+        <div className="mt-20 grid gap-5 sm:grid-cols-3">
           {[
             {
               icon: Users,
-              title: "Role-based access",
-              desc: "Dispatcher, driver, and customer portals with dedicated workflows.",
+              title: "Three roles",
+              desc: "Dispatcher command center, mobile driver nav, customer live track.",
+              color: "text-red-400",
             },
             {
               icon: MapPin,
-              title: "Live fleet map",
-              desc: "Interpolated vehicle movement along OSRM-optimized routes.",
+              title: "OSRM routing",
+              desc: "Road-following polylines — not straight lines. Live progress split.",
+              color: "text-rose-400",
             },
             {
               icon: Truck,
-              title: "Smart assignment",
-              desc: "Proximity + load scoring to suggest the best available driver.",
+              title: "Smart assign",
+              desc: "Proximity + load scoring picks the best available driver.",
+              color: "text-red-300",
             },
-          ].map(({ icon: Icon, title, desc }) => (
-            <div
-              key={title}
-              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
-            >
-              <Icon className="h-8 w-8 text-blue-600" />
-              <h3 className="mt-3 font-semibold">{title}</h3>
-              <p className="mt-1 text-sm text-slate-600">{desc}</p>
-            </div>
+          ].map(({ icon: Icon, title, desc, color }) => (
+            <Card key={title} className="hover:border-red-500/25 transition-colors">
+              <Icon className={`h-8 w-8 ${color}`} />
+              <CardTitle className="!mb-0 mt-3">{title}</CardTitle>
+              <p className="mt-2 text-sm text-slate-400 leading-relaxed">{desc}</p>
+            </Card>
           ))}
         </div>
       </section>

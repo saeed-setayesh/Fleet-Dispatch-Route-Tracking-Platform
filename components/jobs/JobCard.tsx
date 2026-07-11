@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { MapPin, ArrowRight, ExternalLink } from "lucide-react";
 import type { JobStatus } from "@/lib/db/schema";
 
 interface JobCardProps {
@@ -16,52 +17,87 @@ interface JobCardProps {
     createdAt?: Date | string;
   };
   showTrackLink?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
   actions?: React.ReactNode;
 }
 
-export function JobCard({ job, showTrackLink, actions }: JobCardProps) {
+export function JobCard({
+  job,
+  showTrackLink,
+  selected,
+  onSelect,
+  actions,
+}: JobCardProps) {
   return (
-    <Card className="space-y-3">
+    <Card
+      glow={selected}
+      onClick={onSelect}
+      className={`space-y-3 transition-all ${onSelect ? "cursor-pointer hover:border-red-500/30" : ""} ${selected ? "ring-1 ring-red-500/50" : ""}`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-mono text-slate-400">{job.id.slice(0, 8)}</p>
-          <Badge status={job.status} className="mt-1" />
+          <p className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+            #{job.id.slice(0, 8)}
+          </p>
+          <Badge status={job.status} className="mt-1.5" />
         </div>
         {showTrackLink && (
           <Link
             href={`/track/${job.id}`}
-            className="text-sm text-blue-600 hover:underline"
+            className="flex items-center gap-1 text-xs font-medium text-red-400 hover:text-red-300"
+            onClick={(e) => e.stopPropagation()}
           >
-            Track
+            Track <ExternalLink className="h-3 w-3" />
           </Link>
         )}
       </div>
-      <div className="space-y-1 text-sm">
-        <p>
-          <span className="text-slate-500">From:</span> {job.pickupAddress}
-        </p>
-        <p>
-          <span className="text-slate-500">To:</span> {job.dropoffAddress}
-        </p>
+
+      <div className="space-y-2 text-sm">
+        <div className="flex items-start gap-2 rounded-lg bg-slate-900/50 p-2.5">
+          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+          <span className="text-slate-300">{job.pickupAddress}</span>
+        </div>
+        <div className="flex justify-center">
+          <ArrowRight className="h-4 w-4 text-slate-600" />
+        </div>
+        <div className="flex items-start gap-2 rounded-lg bg-slate-900/50 p-2.5">
+          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+          <span className="text-slate-300">{job.dropoffAddress}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
         {job.customerName && (
-          <p>
-            <span className="text-slate-500">Customer:</span> {job.customerName}
-          </p>
+          <div>
+            <span className="text-slate-600">Customer</span>
+            <p className="font-medium text-slate-300">{job.customerName}</p>
+          </div>
         )}
         {job.driverName && (
-          <p>
-            <span className="text-slate-500">Driver:</span> {job.driverName}
-            {job.plateNumber && ` (${job.plateNumber})`}
-          </p>
+          <div>
+            <span className="text-slate-600">Driver</span>
+            <p className="font-medium text-slate-300">
+              {job.driverName}
+              {job.plateNumber && (
+                <span className="text-slate-500"> · {job.plateNumber}</span>
+              )}
+            </p>
+          </div>
         )}
         {job.eta && (
-          <p>
-            <span className="text-slate-500">ETA:</span>{" "}
-            {new Date(job.eta).toLocaleString()}
-          </p>
+          <div className="col-span-2">
+            <span className="text-slate-600">ETA </span>
+            <span className="font-medium text-red-300">
+              {new Date(job.eta).toLocaleString()}
+            </span>
+          </div>
         )}
       </div>
-      {actions && <div className="pt-2 border-t border-slate-100">{actions}</div>}
+
+      {actions && (
+        <div className="border-t border-slate-800/80 pt-3">{actions}</div>
+      )}
     </Card>
   );
 }
